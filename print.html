@@ -1,0 +1,12 @@
+
+
+<h1>Printing {{.Title}}</h1>
+
+<form name="printform" action="/print" method="POST">
+<div><textarea name="body" rows="20" cols="80"></textarea></div>
+<div><input type="submit" value="Print"></div>
+</form>
+
+<script type="text/javascript" language="JavaScript">
+document.printform.body.focus();
+</script>
