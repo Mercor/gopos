@@ -1,6 +1,7 @@
 package main
 
 import (
+	"code.google.com/p/gorilla/pat"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 )
 
 var debug = flag.Bool("d", false, "set the debug modus( print informations )")
+var remserialPort = flag.String("rsport", "23000", "remserial Port [default=23000]")
+var remserialIP = flag.String("rsip", "127.0.0.1", "remserial IP [default=127.0.0.1]")
 
 var cn io.Writer
 var err error
@@ -32,14 +35,7 @@ type escpos struct {
 var myPrinter *escpos
 
 func (e escpos) SetDst(dst1 io.Writer) {
-	log.Print("using dst:", dst1)
 	e.dst = dst1
-}
-
-func (e escpos) Send(msg string) {
-	t, _ := hex.DecodeString(msg)
-	log.Printf("Sende %s Hex %s", msg, hex.Dump(t))
-	fmt.Fprintf(cn, msg)
 }
 
 func (e *escpos) Write(data []byte) (n int, err error) {
@@ -54,7 +50,6 @@ func (e *escpos) toggleBW() {
 	} else {
 		e.bw = 1
 	}
-	log.Printf("BW %i", e.bw)
 	t := fmt.Sprintf("\x1DB%c", e.bw)
 	e.Send(t)
 }
@@ -97,7 +92,6 @@ func (e *escpos) toggleBold() {
 	} else {
 		e.bold = 1
 	}
-	log.Printf("Bold %i", e.bold)
 	t := fmt.Sprintf("\x1BG%c", e.bold)
 	e.Send(t)
 }
@@ -113,7 +107,6 @@ func (e *escpos) toggleUnderline() {
 	} else {
 		e.under = 1
 	}
-	log.Printf("Underline %i", e.under)
 	t := fmt.Sprintf("\x1B-%c", e.under)
 	e.Send(t)
 }
@@ -158,27 +151,30 @@ func Test(err error, mesg string) {
 
 func handler(w http.ResponseWriter, r *http.Request) {
 	title := "Print"
-	log.Print("handler(): Method is ", r.Method)
-	if r.Method != "POST" {
-		p := &Page{Title: title}
-		t, _ := template.ParseFiles("print.html")
-		t.Execute(w, p)
-		log.Print("handler(): serving print.html")
-		return
-	}
-	http.Redirect(w, r, "/", http.StatusFound)
+	//	log.Print("handler(): Method is ", r.Method)
+	p := &Page{Title: title}
+	t, _ := template.ParseFiles("print.html")
+	t.Execute(w, p)
+	log.Print("handler(): serving print.html")
+	return
+
 }
 
 func printHandler(w http.ResponseWriter, r *http.Request) {
-	log.Print("printhandler(): Method is ", r.Method)
-	if r.Method != "POST" {
-		http.Redirect(w, r, "/", http.StatusFound)
-		return
-	}
+
+	// init to reset all settings
 	myPrinter.init()
 
 	body := r.FormValue("body")
 	log.Print("handler(): body is ", body)
+
+	// look for special formatter
+	// * bold
+	// _ underline
+	// { left justified
+	// } right justified
+	// ^ center
+	// - invers
 	b := strings.FieldsFunc(body, func(char rune) bool {
 		switch char {
 		case '*', '-', '_', '{', '}', '^':
@@ -212,31 +208,52 @@ func printHandler(w http.ResponseWriter, r *http.Request) {
 			lange += 1
 		}
 	}
+
+	// beautify: print 5 form feeds 
 	myPrinter.ffn(5)
+
+	//cut paper
 	myPrinter.cut()
+
 	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+var Usage = func() {
+	fmt.Fprintf(os.Stderr, "\nUsage of %s:\n", os.Args[0])
+	flag.PrintDefaults()
+	fmt.Fprintf(os.Stderr, "\n\n")
 }
 
 func main() {
 
-	// connect
-	destination := "127.0.0.1:23000"
-	log.Print("main(): connect to ", destination)
+	flag.Usage = Usage
+	flag.Parse()
+
+	// connect to remserial
+	destination := *remserialIP + ":" + *remserialPort // "127.0.0.1:23000"
+	log.Print("main(): connect to remserial via ", destination)
 	cn, err = net.Dial("tcp", destination)
-	Test(err, "dialing")
-	//    fmt.Fprintf(cn, "\x1B\x40")
-	//    fmt.Fprintf(cn, "erster Test")
+	Test(err, "connecting....")
+
+	// initialize printer object
 	myPrinter = new(escpos)
+
+	//set io.Writer Interface to printer
 	myPrinter.SetDst(cn)
 
-	http.HandleFunc("/print", printHandler)
-	http.HandleFunc("/", handler)
-	http.ListenAndServe(":8080", nil)
+	// Setup router
+	r := pat.New()
 
-	//myPrinter.Send("\x1B\x40");
-	myPrinter.fontC()
-	myPrinter.Send("HalloTestüöäß\n")
-	myPrinter.ffn(5)
-	myPrinter.cut()
+	// Handler for POST Requests is printHandler
+	r.Post("/print", printHandler)
+
+	// Normal handler
+	r.Get("/", handler)
+
+	// Routing all traffic to router
+	http.Handle("/", r)
+
+	// "main loop"
+	http.ListenAndServe(":8080", nil)
 
 }
